@@ -1,0 +1,4 @@
+<room element="li" requires="name, role, description">
+  <strong>{name}</strong> — <em>{role}</em>.
+  {description}
+</room>

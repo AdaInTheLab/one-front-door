@@ -1,0 +1,4 @@
+<room element="article" requires="title, body">
+  <h3>{title}</h3>
+  <p>{body}</p>
+</room>
