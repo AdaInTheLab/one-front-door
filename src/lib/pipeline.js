@@ -48,6 +48,28 @@ function createRenderer() {
  * Must run BEFORE markdown parsing to avoid HTML escaping.
  */
 function processRoomDirectives(content, rooms) {
+  // First, protect code fences and inline code from directive processing.
+  // Replace them with placeholders, process directives, then restore.
+  const codeFences = [];
+  const protected_ = content
+    .replace(/```[\s\S]*?```/g, (match) => {
+      const idx = codeFences.length;
+      codeFences.push(match);
+      return `\x00CODEFENCE_${idx}\x00`;
+    })
+    .replace(/`[^`]+`/g, (match) => {
+      const idx = codeFences.length;
+      codeFences.push(match);
+      return `\x00CODEFENCE_${idx}\x00`;
+    });
+
+  const processed = _processRoomDirectivesInner(protected_, rooms);
+
+  // Restore code fences
+  return processed.replace(/\x00CODEFENCE_(\d+)\x00/g, (_, idx) => codeFences[parseInt(idx)]);
+}
+
+function _processRoomDirectivesInner(content, rooms) {
   const marker = '::room[';
   let result = '';
   let cursor = 0;
