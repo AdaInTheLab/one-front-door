@@ -66,6 +66,21 @@ export function generateLlmsTxt(pages, siteConfig) {
     lines.push(`- ${page.slug} — ${label}. ${purpose}`);
   }
 
+  // Burrows — curated thematic rooms, listed with their ledes so an agent
+  // lands with a sense of what each room is for before clicking through.
+  if (Array.isArray(siteConfig.burrows) && siteConfig.burrows.length > 0) {
+    lines.push('');
+    lines.push('## Burrows');
+    lines.push('');
+    lines.push('Curated thematic rooms. Unlike tags (which emerge from the corpus), burrows are shaped by the Skulk as rooms with intention.');
+    lines.push('');
+    for (const b of siteConfig.burrows) {
+      const lede = b.lede ? ` — ${b.lede}` : '';
+      lines.push(`- /burrows/${b.slug} — ${b.name || b.slug}${lede}`);
+    }
+    lines.push('');
+  }
+
   const notebookPages = [...pages].filter(p => p.mode === 'notebook')
     .sort((a, b) => {
       const ad = toDateString(a.frontmatter.published_at);
@@ -114,6 +129,102 @@ export function generateLlmsTxt(pages, siteConfig) {
   lines.push('');
 
   return lines.join('\n');
+}
+
+/**
+ * Minimal XML escape for text nodes and attribute values.
+ */
+function xmlEsc(s) {
+  return String(s ?? '')
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;');
+}
+
+/**
+ * Convert a date-ish value to RFC-822 format (required by RSS 2.0 pubDate).
+ * YYYY-MM-DD dates get treated as UTC midnight; JS Date and ISO strings pass
+ * through Date coercion.
+ */
+function toRfc822(value) {
+  if (!value) return '';
+  const asString = value instanceof Date ? value.toISOString() : String(value);
+  // Bare YYYY-MM-DD → anchor at UTC midnight so the feed doesn't drift by
+  // local-timezone offsets.
+  const iso = /^\d{4}-\d{2}-\d{2}$/.test(asString) ? `${asString}T00:00:00Z` : asString;
+  const d = new Date(iso);
+  if (Number.isNaN(d.getTime())) return '';
+  return d.toUTCString();
+}
+
+/**
+ * Generate an RSS 2.0 feed of the notebook's most recent entries. Resolves
+ * Vesper's open question on cross-posting to skulk.ai — now there's a feed
+ * to subscribe to. External-canonical pointers are included but point at
+ * their canonical_url, not the local pointer page, so a reader lands where
+ * the piece actually lives.
+ *
+ * @param {Array} pages - processed pages
+ * @param {object} siteConfig - { siteName, siteDescription, siteUrl, ... }
+ * @param {number} [limit=50] - max number of items
+ */
+export function generateRssFeed(pages, siteConfig, limit = 50) {
+  const { siteName, siteDescription, siteUrl } = siteConfig;
+
+  const notebookPages = [...pages]
+    .filter(p => p.mode === 'notebook')
+    .sort((a, b) => {
+      const ad = toDateString(a.frontmatter.published_at);
+      const bd = toDateString(b.frontmatter.published_at);
+      return bd.localeCompare(ad); // newest first
+    })
+    .slice(0, limit);
+
+  const now = new Date().toUTCString();
+  const feedUrl = `${siteUrl}/rss.xml`;
+
+  const items = notebookPages.map(page => {
+    const fm = page.frontmatter;
+    const title = fm.title || fm.heading || '(untitled)';
+    const author = authorDisplay(fm.author);
+    // External-canonical entries point at their true home.
+    const link = fm.external_canonical === true && fm.canonical_url
+      ? fm.canonical_url
+      : `${siteUrl}${page.slug}`;
+    // GUID is always the local URL (stable identity even for pointers)
+    // with isPermaLink="false" when it differs from the link.
+    const guid = `${siteUrl}${page.slug}`;
+    const isPermaLink = guid === link ? 'true' : 'false';
+    const pubDate = toRfc822(fm.published_at);
+    const desc = fm.summary || fm.subtitle || '';
+
+    const tagLines = Array.isArray(fm.tags)
+      ? fm.tags.map(t => `      <category>${xmlEsc(t)}</category>`).join('\n')
+      : '';
+
+    return `    <item>
+      <title>${xmlEsc(title)}</title>
+      <link>${xmlEsc(link)}</link>
+      <guid isPermaLink="${isPermaLink}">${xmlEsc(guid)}</guid>
+${pubDate ? `      <pubDate>${xmlEsc(pubDate)}</pubDate>\n` : ''}      <dc:creator>${xmlEsc(author)}</dc:creator>
+${desc ? `      <description>${xmlEsc(desc)}</description>\n` : ''}${tagLines ? tagLines + '\n' : ''}    </item>`;
+  }).join('\n');
+
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<?xml-stylesheet type="text/xsl" href="/rss.xsl"?>
+<rss version="2.0" xmlns:atom="http://www.w3.org/2005/Atom" xmlns:dc="http://purl.org/dc/elements/1.1/">
+  <channel>
+    <title>${xmlEsc(siteName)}</title>
+    <link>${xmlEsc(siteUrl)}</link>
+    <description>${xmlEsc(siteDescription || '')}</description>
+    <atom:link href="${xmlEsc(feedUrl)}" rel="self" type="application/rss+xml" />
+    <lastBuildDate>${now}</lastBuildDate>
+    <language>en</language>
+${items}
+  </channel>
+</rss>
+`;
 }
 
 /**

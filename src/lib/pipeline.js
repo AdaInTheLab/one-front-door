@@ -301,10 +301,18 @@ export function applyLayout(page, layoutHtml, navItems, jsonLd) {
   html = html.replace('{heading}', heading);
   html = html.replace('{content}', page.bodyHtml);
 
-  // Build navigation
+  // Build navigation. An item is "current" if the page's slug matches
+  // exactly OR lives beneath it as a descendant — so /voices lights up on
+  // /voices/ada, /burrows/infrastructure lights up Burrows, etc. The root
+  // slug '/' is excluded from section-matching (it'd match everything);
+  // the home link has its own aria-current substitution below.
   const navHtml = navItems.map(item => {
-    const current = item.slug === page.slug ? ' aria-current="page"' : '';
-    const href = item.slug === '/' ? '/' : item.slug;
+    const base = item.slug;
+    const isCurrent =
+      base !== '/' &&
+      (page.slug === base || page.slug.startsWith(base + '/'));
+    const current = isCurrent ? ' aria-current="page"' : '';
+    const href = base === '/' ? '/' : base;
     return `<li><a href="${href}"${current}>${item.label}</a></li>`;
   }).join('\n        ');
 

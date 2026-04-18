@@ -17,10 +17,12 @@
  *   - /tags/           — index listing every tag with counts
  *   - /tags/[tag]      — one page per tag, with its entry stream
  *
+ * Added 2026-04-18:
+ *   - /burrows/         — index of thematic collections (rooms with intention,
+ *                          unlike tags which emerge from the corpus)
+ *   - /burrows/[slug]   — one page per burrow, with its entry stream
+ *
  * Deferred to a later milestone:
- *   - /burrows/[topic] — thematic collections. Requires a `burrow`
- *                        frontmatter field that entries don't have yet.
- *   - Homepage "recent from each voice" block.
  *   - Per-locale routing (/en/voices/..., /ko/voices/...).
  */
 
@@ -39,6 +41,41 @@ function authorsOf(entry) {
     if (a && typeof a === 'object' && a.name) return String(a.name).trim();
     return String(a).trim();
   }).filter(Boolean);
+}
+
+/**
+ * Normalize burrow frontmatter into an array of burrow slugs, combining
+ * any explicit `burrow` field on the entry with inferred membership from
+ * each burrow's `includes_types` rule in site config.
+ *
+ * Explicit declarations always win — if an entry lists `burrow: []`
+ * explicitly as an empty array, it opts out of every burrow. An entry
+ * without a `burrow` field gets type-based inference from config.
+ */
+function burrowsOf(entry, burrowConfig) {
+  if (!burrowConfig || burrowConfig.length === 0) return [];
+
+  const raw = entry.frontmatter.burrow;
+  if (raw !== undefined && raw !== null) {
+    // Explicit declaration: honor it exactly (after normalizing to array).
+    const list = Array.isArray(raw) ? raw : [raw];
+    const validSlugs = new Set(burrowConfig.map(b => b.slug));
+    return list
+      .map(b => String(b).trim())
+      .filter(slug => validSlugs.has(slug));
+  }
+
+  // No explicit field — infer from type via each burrow's includes_types.
+  const type = entry.frontmatter.type;
+  if (!type) return [];
+  const out = [];
+  for (const burrow of burrowConfig) {
+    const includes = burrow.includes_types;
+    if (Array.isArray(includes) && includes.includes(type)) {
+      out.push(burrow.slug);
+    }
+  }
+  return out;
 }
 
 /**
@@ -155,14 +192,14 @@ function sortByDateDesc(entries) {
  * Build a synthetic page object that looks enough like a processed .md
  * page to go through OFD's layout + audit pipeline.
  */
-function syntheticPage({ slug, heading, purpose, description, bodyHtml }) {
+function syntheticPage({ slug, heading, purpose, description, bodyHtml, nav = null }) {
   return {
     slug,
     frontmatter: {
       heading,
       purpose,
       description: description || purpose,
-      nav: null, // synthetic pages don't participate in primary nav
+      nav, // index pages opt in by passing a nav object; per-item pages stay null
     },
     bodyHtml,
     filePath: `aggregate:${slug}`,
@@ -191,6 +228,7 @@ function renderVoiceIndex(voiceMap) {
     purpose: 'An index of every voice that has written in the notebook — click through to any voice for their stream of entries.',
     description: 'Index of Skulk voices with writing in the notebook.',
     bodyHtml: body,
+    nav: { label: 'Voices', order: 10 },
   });
 }
 
@@ -281,6 +319,31 @@ ${introBlock}
 </section>`;
 }
 
+/**
+ * Render breadcrumb trail for a per-item aggregate page — e.g.
+ *   Home › Voices › Ada
+ * Emitted at the very top of per-voice, per-burrow, and per-tag pages so
+ * readers always have a path back to the parent index. The index pages
+ * themselves (/voices, /burrows, /tags) don't get breadcrumbs — the nav
+ * already marks them active.
+ */
+function renderBreadcrumbs(trail) {
+  const items = trail
+    .map((step, i) => {
+      const isLast = i === trail.length - 1;
+      if (isLast) {
+        return `<li aria-current="page">${esc(step.label)}</li>`;
+      }
+      return `<li><a href="${esc(step.href)}">${esc(step.label)}</a></li>`;
+    })
+    .join('\n    ');
+  return `<nav class="breadcrumbs" aria-label="Breadcrumb">
+  <ol class="breadcrumb-list">
+    ${items}
+  </ol>
+</nav>`;
+}
+
 function renderVoicePage(voiceSlug, voiceName, entries, profile) {
   const sorted = sortByDateDesc(entries);
 
@@ -319,7 +382,12 @@ ${listItems}
 </section>`;
   }
 
-  const body = [portraitShell, pinnedBlock, streamBlock]
+  const crumbs = renderBreadcrumbs([
+    { label: 'Home', href: '/' },
+    { label: 'Voices', href: '/voices' },
+    { label: voiceName },
+  ]);
+  const body = [crumbs, portraitShell, pinnedBlock, streamBlock]
     .filter(Boolean)
     .join('\n\n');
 
@@ -360,6 +428,7 @@ function renderTagIndex(tagMap) {
     purpose: 'An index of every tag in the notebook — use tags to cut across voices and find entries that share a concept.',
     description: 'Index of tags across the notebook.',
     bodyHtml: body,
+    nav: { label: 'Tags', order: 30 },
   });
 }
 
@@ -371,7 +440,15 @@ function renderTagPage(tag, entries) {
     .map(e => `  <li>\n    ${renderEntryCard(e).split('\n').join('\n    ')}\n  </li>`)
     .join('\n');
 
-  const body = `<p class="lede">Every entry in the notebook tagged <code>${esc(tag)}</code> — ${esc(countLabel)}, newest first.</p>
+  const crumbs = renderBreadcrumbs([
+    { label: 'Home', href: '/' },
+    { label: 'Tags', href: '/tags' },
+    { label: `#${tag}` },
+  ]);
+
+  const body = `${crumbs}
+
+<p class="lede">Every entry in the notebook tagged <code>${esc(tag)}</code> — ${esc(countLabel)}, newest first.</p>
 
 <ul class="entry-list">
 ${listItems}
@@ -384,6 +461,146 @@ ${listItems}
     description: `Entries tagged ${tag}.`,
     bodyHtml: body,
   });
+}
+
+// ─── Burrow Pages ───────────────────────────────────────────────────────
+
+/**
+ * Render the /burrows/ index. Unlike /tags/ (which lists emergent tags with
+ * counts), the burrow index surfaces each burrow's curated lede so a reader
+ * can feel the room's intent before entering. Empty burrows are listed too,
+ * with a quieter note — burrows are rooms that exist even when no one's
+ * home yet.
+ */
+function renderBurrowIndex(burrowConfig, burrowMap) {
+  const items = burrowConfig
+    .map(b => {
+      const count = (burrowMap.get(b.slug) || []).length;
+      const lede = b.lede ? `<p class="burrow-card-lede">${esc(b.lede)}</p>` : '';
+      const countLabel = count === 0
+        ? `<span class="count quiet">(empty)</span>`
+        : `<span class="count">(${count === 1 ? '1 entry' : count + ' entries'})</span>`;
+      return `<li class="burrow-card">
+    <h2 class="burrow-card-title"><a href="/burrows/${esc(b.slug)}">${esc(b.name || b.slug)}</a></h2>
+    ${lede}
+    <p class="burrow-card-meta">${countLabel}</p>
+  </li>`;
+    })
+    .join('\n  ');
+
+  const body = `<p class="lede">Burrows are rooms with intention — thematic collections shaped by the Skulk, not derived from tags. Each one holds writing of a particular kind.</p>
+
+<ul class="burrow-index">
+  ${items}
+</ul>`;
+
+  return syntheticPage({
+    slug: '/burrows',
+    heading: 'Burrows',
+    purpose: 'An index of the notebook\'s burrows — curated thematic rooms that gather writing by kind rather than by author or tag.',
+    description: 'Index of burrows (thematic collections) in the notebook.',
+    bodyHtml: body,
+    nav: { label: 'Burrows', order: 20 },
+  });
+}
+
+/**
+ * Render a single burrow page. Falls back gracefully if the burrow has no
+ * entries yet — empty burrows should still read cleanly, acknowledging that
+ * the room exists but is quiet.
+ */
+function renderBurrowPage(burrow, entries) {
+  const sorted = sortByDateDesc(entries);
+  const lede = burrow.lede
+    ? `<p class="lede">${esc(burrow.lede)}</p>`
+    : `<p class="lede">The ${esc(burrow.name || burrow.slug)} burrow.</p>`;
+
+  const description = burrow.description
+    ? `<div class="burrow-description">${burrow.description}</div>`
+    : '';
+
+  let streamBlock;
+  if (sorted.length === 0) {
+    streamBlock = `<section class="burrow-empty" aria-label="Burrow status">
+  <p class="quiet">No entries in this burrow yet. When writing lands here, it will appear in this stream, newest first.</p>
+</section>`;
+  } else {
+    const listItems = sorted
+      .map(e => `  <li>\n    ${renderEntryCard(e).split('\n').join('\n    ')}\n  </li>`)
+      .join('\n');
+    const countLabel = sorted.length === 1 ? '1 entry' : `${sorted.length} entries`;
+    streamBlock = `<section class="burrow-entries" aria-label="Entries">
+<p class="burrow-count">${esc(countLabel)}, newest first.</p>
+<ul class="entry-list">
+${listItems}
+</ul>
+</section>`;
+  }
+
+  const crumbs = renderBreadcrumbs([
+    { label: 'Home', href: '/' },
+    { label: 'Burrows', href: '/burrows' },
+    { label: burrow.name || burrow.slug },
+  ]);
+  const body = [crumbs, lede, description, streamBlock].filter(Boolean).join('\n\n');
+
+  return syntheticPage({
+    slug: `/burrows/${burrow.slug}`,
+    heading: burrow.name || burrow.slug,
+    purpose: burrow.lede || `The ${burrow.name || burrow.slug} burrow — a thematic collection in the notebook.`,
+    description: burrow.lede || `The ${burrow.name || burrow.slug} burrow.`,
+    bodyHtml: body,
+  });
+}
+
+/**
+ * Render the filing footer appended to notebook-entry bodies: a "By" row
+ * (voice chips → /voices/[slug]) and a "Filed in" row (burrow chips →
+ * /burrows/[slug]). Both rows are optional — if an entry somehow has no
+ * author or no burrow, that row simply doesn't render.
+ *
+ * Visually paired with the entry tier label at the top: the reader enters
+ * an entry knowing its register, and leaves it knowing who wrote it and
+ * which rooms it lives in.
+ */
+export function renderEntryFilingFooter(frontmatter, burrowConfig) {
+  const authorRows = authorsOf({ frontmatter });
+  const voiceRow = authorRows.length > 0
+    ? `<nav class="entry-voices" aria-label="By">
+  <span class="entry-filing-label">By</span>
+  <span class="entry-filing-list">
+    ${authorRows
+      .map(a => `<a class="entry-voice-chip" href="/voices/${esc(slugify(a))}">${esc(a)}</a>`)
+      .join('\n    ')}
+  </span>
+</nav>`
+    : '';
+
+  const burrowSlugs = burrowsOf({ frontmatter }, burrowConfig || []);
+  const byslug = new Map((burrowConfig || []).map(b => [b.slug, b]));
+  const burrowRow = burrowSlugs.length > 0
+    ? `<nav class="entry-burrows" aria-label="Filed in">
+  <span class="entry-filing-label">Filed in</span>
+  <span class="entry-filing-list">
+    ${burrowSlugs
+      .map(slug => byslug.get(slug))
+      .filter(Boolean)
+      .map(b => `<a class="entry-burrow-chip" href="/burrows/${esc(b.slug)}">${esc(b.name || b.slug)}</a>`)
+      .join('\n    ')}
+  </span>
+</nav>`
+    : '';
+
+  if (!voiceRow && !burrowRow) return '';
+
+  return `<section class="entry-filing" aria-label="Entry filing">
+${[voiceRow, burrowRow].filter(Boolean).join('\n')}
+</section>`;
+}
+
+/** @deprecated — kept temporarily for the v0.2 transition. */
+export function renderEntryBurrowChips(frontmatter, burrowConfig) {
+  return renderEntryFilingFooter(frontmatter, burrowConfig);
 }
 
 // ─── Pointer Cards (for external_canonical entries) ────────────────────
@@ -566,8 +783,14 @@ export const FEEDS = {
  *                                        object with { voice, role, lede,
  *                                        portrait, portrait_alt, pinned,
  *                                        bodyHtml }.
+ * @param {object} [options]
+ * @param {Array}  [options.burrows] - optional burrow config:
+ *                                     [{ slug, name, lede, description,
+ *                                        includes_types: ['trace', ...] }, ...]
+ *                                     If present, /burrows/ index and
+ *                                     per-burrow pages are generated.
  */
-export function generateAggregatePages(pages, profiles = new Map()) {
+export function generateAggregatePages(pages, profiles = new Map(), options = {}) {
   const entries = pages.filter(p => p.mode === 'notebook');
 
   // Group entries by author slug → { name, entries[] }
@@ -612,6 +835,23 @@ export function generateAggregatePages(pages, profiles = new Map()) {
     out.push(renderTagIndex(tagMap));
     for (const [tag, tagEntries] of tagMap) {
       out.push(renderTagPage(tag, tagEntries));
+    }
+  }
+
+  // Burrows: optional, driven entirely by site config. Silently skipped
+  // when no burrows are declared (back-compat with v0.2 consumers).
+  const burrowConfig = Array.isArray(options.burrows) ? options.burrows : [];
+  if (burrowConfig.length > 0) {
+    const burrowMap = new Map();
+    for (const b of burrowConfig) burrowMap.set(b.slug, []);
+    for (const entry of entries) {
+      for (const slug of burrowsOf(entry, burrowConfig)) {
+        burrowMap.get(slug).push(entry);
+      }
+    }
+    out.push(renderBurrowIndex(burrowConfig, burrowMap));
+    for (const burrow of burrowConfig) {
+      out.push(renderBurrowPage(burrow, burrowMap.get(burrow.slug) || []));
     }
   }
 

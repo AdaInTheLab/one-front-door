@@ -20,8 +20,8 @@ import { marked } from 'marked';
 import { loadRooms } from './rooms.js';
 import { processPage, applyLayout } from './pipeline.js';
 import { auditHTML, formatAuditReport } from './audit.js';
-import { generateLlmsTxt, generateJsonLd, generateSitemap } from './wayfinding.js';
-import { generateAggregatePages, FEEDS } from './aggregates.js';
+import { generateLlmsTxt, generateJsonLd, generateSitemap, generateRssFeed } from './wayfinding.js';
+import { generateAggregatePages, FEEDS, renderEntryFilingFooter } from './aggregates.js';
 
 /**
  * Load voice profile files from a directory.
@@ -186,9 +186,25 @@ async function build() {
   // and audit path as hand-authored content. Voice profiles customize the
   // per-voice page output; voices with profiles but no entries still get
   // a page.
-  const aggregatePages = generateAggregatePages(pages, voiceProfiles);
+  // Step 4b½: Append the filing footer (By [Voice] + Filed in [Burrows])
+  // to every notebook entry so each page ends with clear wayfinding back
+  // to the aggregators. External-canonical pointers skip this — their
+  // pointer card already carries its own context.
+  const burrowConfig = Array.isArray(siteConfig.burrows) ? siteConfig.burrows : [];
+  for (const page of pages) {
+    if (page.mode !== 'notebook') continue;
+    if (page.frontmatter && page.frontmatter.external_canonical === true) continue;
+    const footer = renderEntryFilingFooter(page.frontmatter, burrowConfig);
+    if (footer) page.bodyHtml = page.bodyHtml + '\n\n' + footer;
+  }
+
+  const aggregatePages = generateAggregatePages(pages, voiceProfiles, {
+    burrows: burrowConfig,
+  });
   if (aggregatePages.length > 0) {
-    console.log(`  Generated ${aggregatePages.length} aggregate page(s) (voices, tags)`);
+    const hasBurrows = Array.isArray(siteConfig.burrows) && siteConfig.burrows.length > 0;
+    const label = hasBurrows ? 'voices, tags, burrows' : 'voices, tags';
+    console.log(`  Generated ${aggregatePages.length} aggregate page(s) (${label})`);
     pages.push(...aggregatePages);
   }
 
@@ -305,6 +321,14 @@ async function build() {
   const sitemap = generateSitemap(pages, siteConfig);
   writeFileSync(join(DIST, 'sitemap.xml'), sitemap, 'utf-8');
   console.log('  ✓ sitemap.xml generated');
+
+  // Emit rss.xml only when there are notebook entries to syndicate.
+  const hasNotebook = pages.some(p => p.mode === 'notebook');
+  if (hasNotebook) {
+    const rss = generateRssFeed(pages, siteConfig);
+    writeFileSync(join(DIST, 'rss.xml'), rss, 'utf-8');
+    console.log('  ✓ rss.xml generated');
+  }
 
   // Step 9: Write habitability report
   const report = {
