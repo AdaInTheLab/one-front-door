@@ -41,7 +41,10 @@ export function auditHTML(html, frontmatter, filePath) {
   // 7. Page has a single <h1>
   checks.push(checkSingleH1(html, context));
 
-  // 8. Nav exists and has links
+  // 8. Page has at most one <main>
+  checks.push(checkSingleMain(html, context));
+
+  // 9. Nav exists and has links
   checks.push(checkNavigation(html, context));
 
   // --- Atmosphere Layer ---
@@ -175,6 +178,25 @@ function checkSingleH1(html, ctx) {
       : count === 0
         ? 'Page has no <h1> — a room without a name.'
         : `Page has ${count} <h1> elements — a room can only have one name.`,
+    severity: 'error'
+  };
+}
+
+function checkSingleMain(html, ctx) {
+  // HTML5 permits at most one visible <main> element per document.
+  // Zero is fine (not every snippet carries one); two or more are invalid
+  // and signal either a layout+page double-wrap or nested main-regions.
+  const mains = html.match(/<main\b/g);
+  const count = mains ? mains.length : 0;
+  const pass = count <= 1;
+  return {
+    name: 'single-main',
+    pass,
+    message: pass
+      ? count === 0
+        ? 'No <main> element (fine if inherited from layout).'
+        : 'Page has exactly one <main>.'
+      : `Page has ${count} <main> elements — HTML5 permits at most one per document. Swap inner <main> for <section> or <article>.`,
     severity: 'error'
   };
 }
