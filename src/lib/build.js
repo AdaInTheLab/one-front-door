@@ -154,13 +154,22 @@ async function build() {
     console.log(`  ⚠ Unknown feed(s) referenced: ${[...unknownFeeds].join(', ')}`);
   }
 
-  // Step 5: Load layout
+  // Step 5: Load layout, substitute site-level slots (footer) once before
+  // the per-page loop. Per-page slots still get substituted by applyLayout.
   const layoutPath = join(LAYOUTS_DIR, 'default.html');
   if (!existsSync(layoutPath)) {
     console.error(`\n  ✗ No layout found at ${layoutPath}`);
     process.exit(1);
   }
-  const layoutHtml = readFileSync(layoutPath, 'utf-8');
+  let layoutHtml = readFileSync(layoutPath, 'utf-8');
+
+  // Footer: consumer-defined in ofd.config.js as a `footer` HTML string.
+  // If absent, a minimal framework-credit fallback is used.
+  const defaultFooter = `<p class="quiet">Built with <a href="https://github.com/AdaInTheLab/one-front-door">One Front Door</a>.</p>`;
+  const footerHtml = typeof siteConfig.footer === 'string' && siteConfig.footer.trim().length > 0
+    ? siteConfig.footer
+    : defaultFooter;
+  layoutHtml = layoutHtml.replace('{footer}', footerHtml);
 
   // Step 6: Build nav items from site-mode pages only.
   // Notebook entries do not declare nav — their aggregators (voices/burrows/tags)
