@@ -311,6 +311,7 @@ async function build() {
     timestamp: new Date().toISOString(),
     pages: auditResults.map(r => ({
       file: r.filePath,
+      tier: r.tier,
       score: r.score,
       pass: r.pass,
       checks: r.checks

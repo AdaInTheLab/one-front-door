@@ -3,18 +3,41 @@
  *
  * This is not a linter you can ignore. It's a build step that blocks output.
  * A page that fails the audit does not get built. Period.
+ *
+ * ─── Tiers ────────────────────────────────────────────────────────────
+ *
+ * As of v0.3, notebook entries with `type: trace` are audited at a relaxed
+ * tier designed around Luna's "safe legibility" spec:
+ *
+ *     The bar is not literary quality, it's safe legibility.
+ *
+ * Per Koda's two-tier design:
+ *
+ *   Tier A (shaped):  full 10-rule audit. For notes, myths, manifestos,
+ *                     voice pages, tag pages, burrow pages, homepage.
+ *
+ *   Tier B (trace):   same structural/accessibility rules, but link-text
+ *                     downgrades from error to warning (a 2am raw capture
+ *                     can have a rough link without blocking the build).
+ *                     Adds trace-specific frontmatter checks: the entry
+ *                     must be timestamped (error) and should carry at
+ *                     least one tag (warning, per Luna's "lightly tagged").
+ *
+ * Tier is auto-detected from frontmatter.type. No caller changes needed.
  */
 
 /**
  * Audit a rendered HTML string for habitability compliance.
- * Returns { pass: boolean, score: number, checks: Check[] }
- * where Check is { name, pass, message, severity }
+ * Returns { pass, score, tier, total, passed, checks, filePath }
+ * where Check is { name, pass, message, severity }.
  */
 export function auditHTML(html, frontmatter, filePath) {
   const checks = [];
   const context = filePath || 'unknown';
+  const isTrace = Boolean(frontmatter && frontmatter.type === 'trace');
+  const tier = isTrace ? 'B' : 'A';
 
-  // --- Structural Layer ---
+  // --- Structural Layer --- (applies to both tiers)
 
   // 1. Must have semantic root elements (no div soup)
   checks.push(checkSemanticStructure(html, context));
@@ -30,13 +53,16 @@ export function auditHTML(html, frontmatter, filePath) {
 
   // --- Narrative Layer ---
 
-  // 5. No mystery-meat links ("click here", "learn more", "read more")
-  checks.push(checkLinkText(html, context));
+  // 5. No mystery-meat links. In Tier B this drops to warning severity:
+  //    a raw trace is allowed to have rough link text without blocking
+  //    the build. The lint fires either way; only severity changes.
+  checks.push(checkLinkText(html, context, isTrace ? 'warning' : 'error'));
 
-  // 6. Images must have meaningful alt text (not "image", "photo", "")
+  // 6. Images must have meaningful alt text. Stays at error severity
+  //    for both tiers — accessibility is part of "safe legibility."
   checks.push(checkImageAlt(html, context));
 
-  // --- Wayfinding Layer ---
+  // --- Wayfinding Layer --- (applies to both tiers)
 
   // 7. Page has a single <h1>
   checks.push(checkSingleH1(html, context));
@@ -49,8 +75,16 @@ export function auditHTML(html, frontmatter, filePath) {
 
   // --- Atmosphere Layer ---
 
-  // 9. No inline styles (atmosphere lives in CSS, not markup)
+  // 10. No inline styles (atmosphere lives in CSS, not markup)
   checks.push(checkNoInlineStyles(html, context));
+
+  // --- Tier B (trace) frontmatter checks ---
+  //
+  // Luna's safe-legibility floor, applied only to traces.
+  if (isTrace) {
+    checks.push(checkTraceTimestamped(frontmatter, context));
+    checks.push(checkTraceTagged(frontmatter, context));
+  }
 
   // Score
   const passed = checks.filter(c => c.pass).length;
@@ -60,6 +94,7 @@ export function auditHTML(html, frontmatter, filePath) {
   return {
     pass: blocked.length === 0,
     score: Math.round((passed / total) * 100),
+    tier,
     total,
     passed,
     checks,
@@ -127,7 +162,7 @@ function checkNoBareDiv(html, ctx) {
   };
 }
 
-function checkLinkText(html, ctx) {
+function checkLinkText(html, ctx, severity = 'error') {
   const mysteryMeat = /<a[^>]*>(?:\s*)(click here|learn more|read more|here|link|this)(?:\s*)<\/a>/gi;
   const matches = html.match(mysteryMeat);
   const pass = !matches || matches.length === 0;
@@ -137,7 +172,33 @@ function checkLinkText(html, ctx) {
     message: pass
       ? 'All links have descriptive text.'
       : `${matches.length} mystery-meat link(s) found — doors need signs.`,
+    severity
+  };
+}
+
+function checkTraceTimestamped(fm, ctx) {
+  const dated = fm && (fm.published_at || fm.published);
+  const pass = Boolean(dated);
+  return {
+    name: 'trace-timestamped',
+    pass,
+    message: pass
+      ? 'Trace is timestamped.'
+      : 'Trace requires published_at — a moment without a date is hard to come back to.',
     severity: 'error'
+  };
+}
+
+function checkTraceTagged(fm, ctx) {
+  const tags = fm && fm.tags;
+  const hasTags = Array.isArray(tags) && tags.length > 0;
+  return {
+    name: 'trace-tagged',
+    pass: hasTags,
+    message: hasTags
+      ? `Trace carries ${tags.length} tag(s) — findable later.`
+      : 'Trace should carry at least one tag so it can be found later. Lightly tagged is enough.',
+    severity: 'warning'
   };
 }
 
