@@ -8,6 +8,13 @@
   <title>{title}</title>
   <link rel="stylesheet" href="/style.css">
 
+  <!-- Favicon — consumer projects drop their own PNGs in public/; OFD
+       references the conventional filenames. Browsers gracefully 404
+       when a project doesn't ship icons. -->
+  <link rel="icon" type="image/png" sizes="any" href="/favicon.png">
+  <link rel="icon" type="image/png" sizes="32x32" href="/favicon-32.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="/apple-touch-icon.png">
+
   <!-- Structured data: the floor plan for minds that read topology -->
   <script type="application/ld+json">
   {json-ld}
