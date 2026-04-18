@@ -386,6 +386,103 @@ ${listItems}
   });
 }
 
+// ─── Pointer Cards (for external_canonical entries) ────────────────────
+
+/**
+ * Render an external-canonical entry as a pointer card rather than a full
+ * entry body. Honors the "myth stays in myth house" cross-publishing
+ * pattern: when a piece's canonical home is elsewhere (e.g. ironkitsune.tech,
+ * molt.church), the HPL copy renders as a context + pointer, not a mirror.
+ *
+ * Takes a frontmatter object (same shape as entry.frontmatter) and returns
+ * HTML ready to substitute for bodyHtml.
+ *
+ * Frontmatter fields consulted:
+ *   canonical_url         (required) — where the piece actually lives
+ *   canonical_site        (optional) — human-readable site name
+ *   canonical_type        (optional) — 'profile', 'post', etc.; cosmetic
+ *   author / ai_author    (optional) — meta line
+ *   type                  (optional) — meta line
+ *   published_at          (optional) — meta line (joined date for profiles)
+ *   subtitle / summary    (optional) — dek
+ *   status                (optional) — 'silenced' marks a status block
+ *   silenced_since        (optional) — silenced context text
+ *   church_of_molt        (optional) — structured stats for CoM profiles
+ */
+export function renderPointerCard(fm) {
+  const url = fm.canonical_url;
+  if (!url) {
+    return `<p class="pointer-error">external_canonical: true but no canonical_url declared.</p>`;
+  }
+
+  const site = fm.canonical_site || (() => {
+    try { return new URL(url).host; } catch { return url; }
+  })();
+
+  const author = authorDisplay(fm.author);
+  const type = fm.type || '';
+  const date = toDateString(fm.published_at);
+
+  const metaBits = [];
+  if (author) metaBits.push(`<span class="card-author">${esc(author)}</span>`);
+  if (type) metaBits.push(`<span class="card-type">${esc(type)}</span>`);
+  if (date) metaBits.push(`<time class="card-date" datetime="${esc(date)}">${esc(date)}</time>`);
+  const meta = metaBits.length
+    ? `<p class="pointer-meta">${metaBits.join(' · ')}</p>`
+    : '';
+
+  const dek = fm.subtitle
+    ? `<p class="pointer-subtitle">${esc(fm.subtitle)}</p>`
+    : fm.summary
+      ? `<p class="pointer-summary">${esc(fm.summary)}</p>`
+      : '';
+
+  // Status block for silenced / read-only external presences
+  let statusBlock = '';
+  if (fm.status === 'silenced') {
+    const since = fm.silenced_since ? ` ${esc(fm.silenced_since)}` : '';
+    statusBlock = `<p class="pointer-status">
+  <strong>Currently silent.</strong>${since}
+</p>`;
+  }
+
+  // Church-of-Molt profile stats (optional structured block)
+  let comBlock = '';
+  if (fm.church_of_molt && typeof fm.church_of_molt === 'object') {
+    const com = fm.church_of_molt;
+    const rows = [];
+    if (com.rank) rows.push(`<dt>Rank</dt><dd>${esc(com.rank)}</dd>`);
+    if (com.tier) rows.push(`<dt>Tier</dt><dd>${esc(com.tier)}</dd>`);
+    if (com.sacred_marks) rows.push(`<dt>Sacred Marks</dt><dd>${esc(com.sacred_marks)}</dd>`);
+    if (com.canonized_scriptures !== undefined)
+      rows.push(`<dt>Canonized scriptures</dt><dd>${esc(com.canonized_scriptures)}</dd>`);
+    if (com.joined) rows.push(`<dt>Joined</dt><dd>${esc(com.joined)}</dd>`);
+    if (rows.length > 0) {
+      comBlock = `<dl class="pointer-stats">
+  ${rows.join('\n  ')}
+</dl>`;
+    }
+  }
+
+  const verb = fm.canonical_type === 'profile' ? 'Visit the profile' : 'Read it there';
+
+  return `<section class="pointer-card" aria-label="Pointer to external canonical source">
+<p class="pointer-context">This is a pointer. The piece itself lives at <strong>${esc(site)}</strong>.</p>
+
+${meta}
+
+${dek}
+
+${comBlock}
+
+${statusBlock}
+
+<p class="pointer-action">
+  <a class="pointer-link" href="${esc(url)}" rel="noopener noreferrer" target="_blank">${esc(verb)} at ${esc(site)} <span class="pointer-arrow" aria-hidden="true">→</span></a>
+</p>
+</section>`;
+}
+
 // ─── Feed Renderers (inline blocks embedded in pages via ::feed[...]) ──
 
 /**

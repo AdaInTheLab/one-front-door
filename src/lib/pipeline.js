@@ -13,6 +13,7 @@ import matter from 'gray-matter';
 import { marked } from 'marked';
 import { requireValidFrontmatter, requireValidNotebookFrontmatter } from './schema.js';
 import { renderRoom } from './rooms.js';
+import { renderPointerCard } from './aggregates.js';
 
 /**
  * Custom marked renderer that enforces OFD principles at the
@@ -224,7 +225,14 @@ export function processPage(filePath, rooms, pagesDir, options = {}) {
   const rawHtml = marked.parse(withFeeds);
 
   // Step 5: Process heading IDs ({#custom-id} syntax)
-  const bodyHtml = processHeadingIds(rawHtml);
+  let bodyHtml = processHeadingIds(rawHtml);
+
+  // Step 5b: If this page is external-canonical (lives elsewhere), replace
+  // the rendered body with a pointer card. The frontmatter stays available
+  // for meta tags, JSON-LD, and the aggregator; only the visible body swaps.
+  if (mode === 'notebook' && validatedData.external_canonical === true) {
+    bodyHtml = renderPointerCard(validatedData);
+  }
 
   // Step 6: Derive slug. In site mode, slug comes from the file path.
   // In notebook mode, slug is declared in frontmatter, and the output URL
