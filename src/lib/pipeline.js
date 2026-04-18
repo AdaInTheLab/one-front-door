@@ -11,7 +11,7 @@
 import { readFileSync } from 'fs';
 import matter from 'gray-matter';
 import { marked } from 'marked';
-import { requireValidFrontmatter } from './schema.js';
+import { requireValidFrontmatter, requireValidNotebookFrontmatter } from './schema.js';
 import { renderRoom } from './rooms.js';
 
 /**
@@ -157,21 +157,53 @@ function processHeadingIds(html) {
 
 /**
  * Process a single .md page file through the full pipeline.
- * Returns { frontmatter, html, slug }
+ * Returns { frontmatter, html, slug, mode }
+ *
+ * @param {string} filePath - absolute path to the .md file
+ * @param {Map} rooms - loaded room components (from rooms.js)
+ * @param {string} pagesDir - root content directory for slug derivation
+ * @param {object} options - { mode: 'site' | 'notebook', outputPrefix?: string, locale?: string }
  */
-export function processPage(filePath, rooms, pagesDir) {
+export function processPage(filePath, rooms, pagesDir, options = {}) {
+  const mode = options.mode || 'site';
   const raw = readFileSync(filePath, 'utf-8');
 
   // Step 1: Parse frontmatter
   const { data, content } = matter(raw);
 
-  // Step 2: Validate frontmatter — build fails here if invalid
-  requireValidFrontmatter(data, filePath);
+  // Step 2: Validate frontmatter — build fails here if invalid.
+  // In notebook mode, the body is also passed so a missing title can be
+  // derived from the first heading in the body as a last-resort fallback.
+  const validatedData = mode === 'notebook'
+    ? requireValidNotebookFrontmatter(data, filePath, content)
+    : (requireValidFrontmatter(data, filePath), data);
 
-  // Step 3: Process room directives (before markdown parsing)
+  // Step 3a: In notebook mode, normalize body headings against the layout's
+  // h1 (which always renders the frontmatter title).
+  //
+  //   1. If the body's first non-empty line is an h1, strip it —
+  //      the layout's h1 already stands for the page. Leaving the body h1
+  //      would produce two h1s and fail the single-h1 audit.
+  //   2. If the body's first non-empty line is an h2 that matches the title,
+  //      strip it — avoids an h2 echo of the layout's h1.
+  let content2 = content;
+  if (mode === 'notebook') {
+    const firstHeadingPattern = /^\s*(#{1,2})\s+(.+?)\s*$/m;
+    const m = content2.match(firstHeadingPattern);
+    if (m) {
+      const level = m[1].length;
+      const text = m[2].trim();
+      const titleMatch = validatedData.title && text === validatedData.title.trim();
+      if (level === 1 || (level === 2 && titleMatch)) {
+        content2 = content2.replace(firstHeadingPattern, '').replace(/^\s+/, '');
+      }
+    }
+  }
+
+  // Step 3b: Process room directives (before markdown parsing)
   const withRooms = rooms.size > 0
-    ? processRoomDirectives(content, rooms)
-    : content;
+    ? processRoomDirectives(content2, rooms)
+    : content2;
 
   // Step 4: Parse markdown to HTML
   marked.setOptions({
@@ -184,35 +216,58 @@ export function processPage(filePath, rooms, pagesDir) {
   // Step 5: Process heading IDs ({#custom-id} syntax)
   const bodyHtml = processHeadingIds(rawHtml);
 
-  // Step 6: Derive slug from file path
-  const relative = filePath
-    .replace(/\\/g, '/')
-    .replace(pagesDir.replace(/\\/g, '/'), '')
-    .replace(/\.md$/, '')
-    .replace(/\/index$/, '/');
-
-  const slug = relative === '/' ? '/' : relative.replace(/\/$/, '');
+  // Step 6: Derive slug. In site mode, slug comes from the file path.
+  // In notebook mode, slug is declared in frontmatter, and the output URL
+  // gets prefixed (e.g., /entries/[slug]) with an optional locale segment.
+  let slug;
+  if (mode === 'notebook') {
+    const baseSlug = validatedData.slug;
+    const prefix = (options.outputPrefix || '/entries').replace(/\/$/, '');
+    const locale = options.locale || validatedData.locale;
+    const localeSegment = locale ? `/${locale}` : '';
+    slug = `${localeSegment}${prefix}/${baseSlug}`;
+  } else {
+    const relative = filePath
+      .replace(/\\/g, '/')
+      .replace(pagesDir.replace(/\\/g, '/'), '')
+      .replace(/\.md$/, '')
+      .replace(/\/index$/, '/');
+    slug = relative === '/' ? '/' : relative.replace(/\/$/, '');
+  }
 
   return {
-    frontmatter: data,
+    frontmatter: validatedData,
     bodyHtml,
     slug,
-    filePath
+    filePath,
+    mode
   };
 }
 
 /**
  * Wrap a processed page in its layout.
+ *
+ * Handles both site-mode pages (with frontmatter.heading/purpose) and
+ * notebook-mode entries (with frontmatter.title/summary/subtitle), mapping
+ * notebook fields onto the layout's slots so the same layout works for both.
  */
 export function applyLayout(page, layoutHtml, navItems, jsonLd) {
   let html = layoutHtml;
+  const fm = page.frontmatter;
+
+  // Derive layout slot values based on mode. Notebook entries don't carry
+  // purpose/position/heading, they carry title/subtitle/summary — map them.
+  const heading = fm.heading || fm.title || '';
+  const title = fm.title || fm.heading || '';
+  const description = fm.description || fm.summary || fm.subtitle || fm.purpose || '';
+  const purpose = fm.purpose || fm.summary || fm.subtitle || '';
 
   // Replace template slots
-  html = html.replace('{title}', page.frontmatter.heading);
-  html = html.replace('{description}', page.frontmatter.description || page.frontmatter.purpose);
-  html = html.replace('{purpose}', page.frontmatter.purpose);
+  html = html.replace('{title}', title);
+  html = html.replace('{description}', description);
+  html = html.replace('{purpose}', purpose);
   html = html.replace('{json-ld}', JSON.stringify(jsonLd, null, 2));
-  html = html.replace('{heading}', page.frontmatter.heading);
+  html = html.replace('{heading}', heading);
   html = html.replace('{content}', page.bodyHtml);
 
   // Build navigation
