@@ -234,6 +234,19 @@ export function processPage(filePath, rooms, pagesDir, options = {}) {
     bodyHtml = renderPointerCard(validatedData);
   }
 
+  // Step 5c: For notebook traces (audited at Tier B), prepend a visible
+  // "Trace" label so readers know what register they're in. Satisfies
+  // Luna's safe-legibility requirement that entries be "clearly labeled
+  // as Trace." Skipped for external_canonical entries — the pointer card
+  // already carries its own context.
+  if (
+    mode === 'notebook' &&
+    validatedData.type === 'trace' &&
+    !validatedData.external_canonical
+  ) {
+    bodyHtml = `<p class="entry-tier-label entry-tier-label-trace">Trace</p>\n` + bodyHtml;
+  }
+
   // Step 6: Derive slug. In site mode, slug comes from the file path.
   // In notebook mode, slug is declared in frontmatter, and the output URL
   // gets prefixed (e.g., /entries/[slug]) with an optional locale segment.
