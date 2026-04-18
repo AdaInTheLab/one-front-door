@@ -1,6 +1,18 @@
 /**
  * One Front Door — Site Configuration
- * The Human Pattern Lab
+ *
+ * This config builds OFD's OWN documentation site (currently themed as The
+ * Human Pattern Lab's research presence, pending a future generic framework
+ * site). It uses site-mode only: hand-authored rooms under src/pages/ with
+ * OFD's frontmatter contract (purpose, position, heading, nav).
+ *
+ * Consumer projects (e.g. hpl-notebook) bring their own ofd.config.js with
+ * contentRoots pointing at their content. When OFD is invoked from a
+ * consumer project, PROJECT_ROOT becomes that project's directory and this
+ * file is not read.
+ *
+ * v0.2 added: contentRoots array for multi-mode content. See
+ * schema.js for notebook-mode validation rules.
  */
 
 export default {
@@ -23,5 +35,5 @@ export default {
     { label: 'GitHub', url: 'https://github.com/AdaInTheLab' },
     { label: 'X (Ada)', url: 'https://x.com/AdaInTheLab' },
     { label: 'X (Sage)', url: 'https://x.com/LiminalSage_' },
-  ]
+  ],
 };

@@ -7,6 +7,30 @@
  */
 
 /**
+ * Normalize a date-ish frontmatter value to an ISO-like string.
+ * gray-matter's YAML parser converts bare `published_at: 2026-02-08` entries
+ * to JS Date objects; this collapses those back to comparable strings.
+ */
+function toDateString(value) {
+  if (!value) return '';
+  if (value instanceof Date) return value.toISOString().slice(0, 10);
+  return String(value);
+}
+
+/**
+ * Coerce an author field into a display string. HPL content uses three
+ * shapes historically: plain string ("Sage"), array (["Ada", "Sage"]), or
+ * object ({ kind: "ai", name: "Sage" }). Handle all three.
+ */
+function authorDisplay(value) {
+  if (!value) return 'unknown';
+  if (typeof value === 'string') return value;
+  if (Array.isArray(value)) return value.map(authorDisplay).join(' + ');
+  if (typeof value === 'object' && value.name) return String(value.name);
+  return String(value);
+}
+
+/**
  * Generate llms.txt from all pages' frontmatter.
  * This is the lobby map — an agent's first orientation.
  */
@@ -28,16 +52,38 @@ export function generateLlmsTxt(pages, siteConfig) {
   }
   lines.push('');
 
-  // How the site is organized
+  // How the site is organized — nav pages first, then notebook entries
   lines.push('## How This Site Is Organized');
   lines.push('');
-  const sorted = [...pages].sort((a, b) =>
-    (a.frontmatter.nav?.order ?? 999) - (b.frontmatter.nav?.order ?? 999)
-  );
-  for (const page of sorted) {
+
+  const sitePages = [...pages].filter(p => p.mode !== 'notebook')
+    .sort((a, b) =>
+      (a.frontmatter.nav?.order ?? 999) - (b.frontmatter.nav?.order ?? 999)
+    );
+  for (const page of sitePages) {
     const label = page.frontmatter.nav?.label || page.frontmatter.heading;
     const purpose = page.frontmatter.purpose;
     lines.push(`- ${page.slug} — ${label}. ${purpose}`);
+  }
+
+  const notebookPages = [...pages].filter(p => p.mode === 'notebook')
+    .sort((a, b) => {
+      const ad = toDateString(a.frontmatter.published_at);
+      const bd = toDateString(b.frontmatter.published_at);
+      return bd.localeCompare(ad); // newest first
+    });
+  if (notebookPages.length > 0) {
+    lines.push('');
+    lines.push('## Notebook Entries');
+    lines.push('');
+    for (const page of notebookPages) {
+      const title = page.frontmatter.title || page.frontmatter.heading || '(untitled)';
+      const author = authorDisplay(page.frontmatter.author);
+      const type = page.frontmatter.type || 'entry';
+      const dateStr = toDateString(page.frontmatter.published_at);
+      const date = dateStr ? ` (${dateStr})` : '';
+      lines.push(`- ${page.slug} — "${title}" by ${author} [${type}]${date}`);
+    }
   }
   lines.push('');
 
@@ -75,12 +121,18 @@ export function generateLlmsTxt(pages, siteConfig) {
  */
 export function generateJsonLd(page, siteConfig) {
   const { siteName, siteUrl, siteDescription } = siteConfig;
+  const fm = page.frontmatter;
+  const isNotebook = page.mode === 'notebook';
 
+  const name = fm.heading || fm.title || '(untitled)';
+  const description = fm.description || fm.summary || fm.subtitle || fm.purpose || siteDescription;
+
+  const defaultType = isNotebook ? 'Article' : 'WebPage';
   const base = {
     '@context': 'https://schema.org',
-    '@type': page.frontmatter.schema || 'WebPage',
-    'name': page.frontmatter.heading,
-    'description': page.frontmatter.description || page.frontmatter.purpose,
+    '@type': fm.schema || defaultType,
+    'name': name,
+    'description': description,
     'url': `${siteUrl}${page.slug === '/' ? '' : page.slug}`,
     'isPartOf': {
       '@type': 'WebSite',
@@ -89,9 +141,22 @@ export function generateJsonLd(page, siteConfig) {
     }
   };
 
+  // Notebook entries carry authorship & publication metadata.
+  if (isNotebook) {
+    if (fm.author) {
+      const authors = Array.isArray(fm.author) ? fm.author : [fm.author];
+      base.author = authors.map(a => ({
+        '@type': 'Person',
+        name: typeof a === 'string' ? a : (a && a.name) ? String(a.name) : String(a),
+      }));
+    }
+    if (fm.published_at) base.datePublished = toDateString(fm.published_at);
+    if (fm.tags && Array.isArray(fm.tags)) base.keywords = fm.tags.join(', ');
+  }
+
   // If the page has a schema override, let the config extend it
-  if (page.frontmatter.jsonld) {
-    Object.assign(base, page.frontmatter.jsonld);
+  if (fm.jsonld) {
+    Object.assign(base, fm.jsonld);
   }
 
   return base;
