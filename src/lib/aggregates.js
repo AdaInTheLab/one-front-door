@@ -194,26 +194,147 @@ function renderVoiceIndex(voiceMap) {
   });
 }
 
-function renderVoicePage(voiceSlug, voiceName, entries) {
+/**
+ * Render a pinned piece — either a real entry pulled from the page list
+ * or an "upcoming" placeholder card for pieces the voice has named but
+ * not yet shipped.
+ */
+function renderPinned(profile, entries) {
+  const pinned = profile && profile.pinned;
+  if (!pinned) return '';
+
+  // Pinned as a plain slug string: look up the entry.
+  if (typeof pinned === 'string') {
+    const match = entries.find(e => (e.frontmatter.slug || '') === pinned);
+    if (!match) return '';
+    return `<section class="voice-pinned" aria-label="Pinned">
+  <p class="voice-pinned-label">Pinned</p>
+  ${renderEntryCard(match).split('\n').map(l => '  ' + l).join('\n')}
+</section>`;
+  }
+
+  // Pinned as an object: either {slug: "..."} for a real entry, or
+  // {coming: true, title, summary} for a piece not yet written.
+  if (typeof pinned === 'object') {
+    if (pinned.slug) {
+      const match = entries.find(e => (e.frontmatter.slug || '') === pinned.slug);
+      if (match) {
+        return `<section class="voice-pinned" aria-label="Pinned">
+  <p class="voice-pinned-label">Pinned</p>
+  ${renderEntryCard(match).split('\n').map(l => '  ' + l).join('\n')}
+</section>`;
+      }
+    }
+    if (pinned.coming && pinned.title) {
+      const summary = pinned.summary
+        ? `<p class="card-summary">${esc(pinned.summary)}</p>`
+        : '';
+      return `<section class="voice-pinned voice-pinned-upcoming" aria-label="Pinned (upcoming)">
+  <p class="voice-pinned-label">Pinned — upcoming</p>
+  <article class="entry-card entry-card-upcoming">
+    <h2 class="card-title">${esc(pinned.title)}</h2>
+    <p class="card-meta"><span class="card-type">upcoming</span></p>
+    ${summary}
+  </article>
+</section>`;
+    }
+  }
+
+  return '';
+}
+
+/**
+ * Build the portrait shell (figure + voice-intro copy). The figure is
+ * optional per Miso's spec: "if no image exists yet, omit the figure,
+ * the page should still read cleanly with just header + intro + entries."
+ */
+function renderPortraitShell(profile) {
+  if (!profile) return '';
+
+  const lede = profile.lede
+    ? `<p class="lede">${esc(profile.lede)}</p>`
+    : '';
+  const body = profile.bodyHtml || '';
+
+  const figure = profile.portrait
+    ? `<figure class="voice-portrait">
+  <img class="voice-portrait" src="${esc(profile.portrait)}" alt="${esc(profile.portrait_alt || profile.voice || '')}">
+  <figcaption><strong>${esc(profile.voice)}</strong>${profile.role ? ' · ' + esc(profile.role) : ''}</figcaption>
+</figure>`
+    : '';
+
+  if (!figure && !lede && !body) return '';
+
+  const introBlock = `<div class="voice-intro">
+${lede}
+${body}
+</div>`;
+
+  if (!figure) {
+    // No portrait: intro rendered plain, no shell grid wrapping.
+    return introBlock;
+  }
+
+  return `<section class="voice-portrait-shell">
+${figure}
+${introBlock}
+</section>`;
+}
+
+function renderVoicePage(voiceSlug, voiceName, entries, profile) {
   const sorted = sortByDateDesc(entries);
-  const countLabel = entries.length === 1 ? '1 entry' : `${entries.length} entries`;
 
-  // Wrap each rendered card in <li>, preserving its multi-line indent.
-  const listItems = sorted
-    .map(e => `  <li>\n    ${renderEntryCard(e).split('\n').join('\n    ')}\n  </li>`)
-    .join('\n');
+  // If a pinned slug references a real entry, exclude it from the stream
+  // below — it already appears in the pinned block.
+  const pinnedSlug =
+    profile && profile.pinned
+      ? (typeof profile.pinned === 'string'
+          ? profile.pinned
+          : (typeof profile.pinned === 'object' && profile.pinned.slug) || null)
+      : null;
+  const streamEntries = pinnedSlug
+    ? sorted.filter(e => e.frontmatter.slug !== pinnedSlug)
+    : sorted;
 
-  const body = `<p class="lede">Every entry in the notebook written by ${esc(voiceName)} — ${esc(countLabel)}, newest first.</p>
+  const portraitShell = renderPortraitShell(profile);
+  const pinnedBlock = renderPinned(profile, sorted);
 
+  let streamBlock = '';
+  if (streamEntries.length > 0) {
+    const listItems = streamEntries
+      .map(e => `  <li>\n    ${renderEntryCard(e).split('\n').join('\n    ')}\n  </li>`)
+      .join('\n');
+
+    // If no profile was supplied, provide a generic lede so bare voice pages
+    // still read cleanly. With a profile, the lede is already in the portrait
+    // shell and we don't repeat it.
+    const genericLede = !profile
+      ? `<p class="lede">Every entry in the notebook written by ${esc(voiceName)} — ${esc(entries.length === 1 ? '1 entry' : entries.length + ' entries')}, newest first.</p>\n\n`
+      : '';
+
+    streamBlock = `${genericLede}<section class="voice-entries" aria-label="Entries">
 <ul class="entry-list">
 ${listItems}
-</ul>`;
+</ul>
+</section>`;
+  }
+
+  const body = [portraitShell, pinnedBlock, streamBlock]
+    .filter(Boolean)
+    .join('\n\n');
+
+  const purpose = profile && profile.lede
+    ? profile.lede
+    : `Every entry in the notebook written by ${voiceName}.`;
+  const description = profile && profile.lede
+    ? `${voiceName}: ${profile.lede}`
+    : `The ${voiceName} voice page — a stream of their entries in the Skulk's collective notebook.`;
 
   return syntheticPage({
     slug: `/voices/${voiceSlug}`,
     heading: voiceName,
-    purpose: `Every entry in the notebook written by ${voiceName}.`,
-    description: `The ${voiceName} voice page — a stream of their entries in the Skulk's collective notebook.`,
+    purpose,
+    description,
     bodyHtml: body,
   });
 }
@@ -335,15 +456,24 @@ export const FEEDS = {
 // ─── Public API ─────────────────────────────────────────────────────────
 
 /**
- * Given the full list of processed pages, generate all synthetic
- * aggregate pages (voices index, per-voice pages, tags index, per-tag pages)
- * derived from notebook-mode entries. Returns an array of page objects.
+ * Given the full list of processed pages and (optionally) voice profiles,
+ * generate all synthetic aggregate pages derived from notebook-mode entries:
+ *
+ *   /voices/         — index of every voice (has entries OR has a profile)
+ *   /voices/[name]   — per-voice page; uses profile header if available
+ *   /tags/           — index of every tag
+ *   /tags/[tag]      — per-tag page
+ *
+ * @param {Array} pages - processed pages
+ * @param {Map<string,object>} profiles - optional map of voice-slug → profile
+ *                                        object with { voice, role, lede,
+ *                                        portrait, portrait_alt, pinned,
+ *                                        bodyHtml }.
  */
-export function generateAggregatePages(pages) {
+export function generateAggregatePages(pages, profiles = new Map()) {
   const entries = pages.filter(p => p.mode === 'notebook');
-  if (entries.length === 0) return [];
 
-  // Group by author (a canonical slug → { display name, entries[] })
+  // Group entries by author slug → { name, entries[] }
   const voiceMap = new Map();
   for (const entry of entries) {
     for (const author of authorsOf(entry)) {
@@ -352,6 +482,13 @@ export function generateAggregatePages(pages) {
         voiceMap.set(slug, { name: author, entries: [] });
       }
       voiceMap.get(slug).entries.push(entry);
+    }
+  }
+
+  // Voices declared only via profile (no entries yet) still get pages.
+  for (const [slug, profile] of profiles) {
+    if (!voiceMap.has(slug)) {
+      voiceMap.set(slug, { name: profile.voice || slug, entries: [] });
     }
   }
 
@@ -369,7 +506,8 @@ export function generateAggregatePages(pages) {
   if (voiceMap.size > 0) {
     out.push(renderVoiceIndex(voiceMap));
     for (const [slug, { name, entries: voiceEntries }] of voiceMap) {
-      out.push(renderVoicePage(slug, name, voiceEntries));
+      const profile = profiles.get(slug) || null;
+      out.push(renderVoicePage(slug, name, voiceEntries, profile));
     }
   }
 

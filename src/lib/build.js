@@ -15,11 +15,56 @@
 
 import { readFileSync, writeFileSync, mkdirSync, cpSync, existsSync, readdirSync } from 'fs';
 import { join, dirname, resolve } from 'path';
+import matter from 'gray-matter';
+import { marked } from 'marked';
 import { loadRooms } from './rooms.js';
 import { processPage, applyLayout } from './pipeline.js';
 import { auditHTML, formatAuditReport } from './audit.js';
 import { generateLlmsTxt, generateJsonLd, generateSitemap } from './wayfinding.js';
 import { generateAggregatePages, FEEDS } from './aggregates.js';
+
+/**
+ * Load voice profile files from a directory.
+ *
+ * Each file is a markdown document with frontmatter declaring voice
+ * metadata (voice, role, lede, portrait, pinned) and a body of prose
+ * in the voice's own words. Returns a Map keyed by voice slug.
+ *
+ * Voice slug is derived from the `voice` frontmatter value (e.g. "Miso"
+ * → "miso"), matching the slugify behavior in aggregates.js.
+ */
+function loadVoiceProfiles(dir) {
+  const profiles = new Map();
+  if (!dir || !existsSync(dir)) return profiles;
+
+  const slugify = (name) =>
+    String(name).toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-+|-+$/g, '');
+
+  let entries;
+  try {
+    entries = readdirSync(dir, { withFileTypes: true });
+  } catch {
+    return profiles;
+  }
+
+  for (const entry of entries) {
+    if (!entry.isFile() || !entry.name.endsWith('.md')) continue;
+    if (entry.name.startsWith('_')) continue;
+
+    const filePath = join(dir, entry.name);
+    const raw = readFileSync(filePath, 'utf-8');
+    const { data, content } = matter(raw);
+
+    if (!data.voice) continue; // profile files must declare their voice
+
+    const slug = data.voice_slug ? slugify(data.voice_slug) : slugify(data.voice);
+    const bodyHtml = content.trim().length > 0 ? marked.parse(content) : '';
+
+    profiles.set(slug, { ...data, bodyHtml });
+  }
+
+  return profiles;
+}
 
 // Two roots:
 //
@@ -125,16 +170,29 @@ async function build() {
     console.log('');
   }
 
-  // Step 4b: Generate aggregate pages (voices + tags) from notebook entries.
+  // Step 4b: Load voice profiles (optional). Each profile supplies
+  // per-voice header content — lede, portrait, pinned piece, and the
+  // voice's own intro prose — for their /voices/[name] page.
+  const voicesPath = typeof config.voicesPath === 'string'
+    ? resolve(PROJECT_ROOT, config.voicesPath)
+    : null;
+  const voiceProfiles = loadVoiceProfiles(voicesPath);
+  if (voiceProfiles.size > 0) {
+    console.log(`  Loaded ${voiceProfiles.size} voice profile(s)`);
+  }
+
+  // Step 4c: Generate aggregate pages (voices + tags) from notebook entries.
   // These are synthetic site-shaped pages that go through the same layout
-  // and audit path as hand-authored content.
-  const aggregatePages = generateAggregatePages(pages);
+  // and audit path as hand-authored content. Voice profiles customize the
+  // per-voice page output; voices with profiles but no entries still get
+  // a page.
+  const aggregatePages = generateAggregatePages(pages, voiceProfiles);
   if (aggregatePages.length > 0) {
     console.log(`  Generated ${aggregatePages.length} aggregate page(s) (voices, tags)`);
     pages.push(...aggregatePages);
   }
 
-  // Step 4c: Substitute ::feed[name] placeholders (inserted by pipeline as
+  // Step 4d: Substitute ::feed[name] placeholders (inserted by pipeline as
   // <!--OFD-FEED:name--> comments) with rendered HTML. Feeds need the full
   // page list, which is only complete after aggregation.
   const feedPlaceholderRegex = /<!--OFD-FEED:([a-zA-Z0-9_-]+)-->/g;
