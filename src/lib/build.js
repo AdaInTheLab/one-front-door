@@ -19,6 +19,7 @@ import { loadRooms } from './rooms.js';
 import { processPage, applyLayout } from './pipeline.js';
 import { auditHTML, formatAuditReport } from './audit.js';
 import { generateLlmsTxt, generateJsonLd, generateSitemap } from './wayfinding.js';
+import { generateAggregatePages } from './aggregates.js';
 
 // Two roots:
 //
@@ -122,6 +123,15 @@ async function build() {
       console.log(`    ${detail.trim()}`);
     }
     console.log('');
+  }
+
+  // Step 4b: Generate aggregate pages (voices + tags) from notebook entries.
+  // These are synthetic site-shaped pages that go through the same layout
+  // and audit path as hand-authored content.
+  const aggregatePages = generateAggregatePages(pages);
+  if (aggregatePages.length > 0) {
+    console.log(`  Generated ${aggregatePages.length} aggregate page(s) (voices, tags)`);
+    pages.push(...aggregatePages);
   }
 
   // Step 5: Load layout
