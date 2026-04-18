@@ -19,7 +19,7 @@ import { loadRooms } from './rooms.js';
 import { processPage, applyLayout } from './pipeline.js';
 import { auditHTML, formatAuditReport } from './audit.js';
 import { generateLlmsTxt, generateJsonLd, generateSitemap } from './wayfinding.js';
-import { generateAggregatePages } from './aggregates.js';
+import { generateAggregatePages, FEEDS } from './aggregates.js';
 
 // Two roots:
 //
@@ -132,6 +132,26 @@ async function build() {
   if (aggregatePages.length > 0) {
     console.log(`  Generated ${aggregatePages.length} aggregate page(s) (voices, tags)`);
     pages.push(...aggregatePages);
+  }
+
+  // Step 4c: Substitute ::feed[name] placeholders (inserted by pipeline as
+  // <!--OFD-FEED:name--> comments) with rendered HTML. Feeds need the full
+  // page list, which is only complete after aggregation.
+  const feedPlaceholderRegex = /<!--OFD-FEED:([a-zA-Z0-9_-]+)-->/g;
+  const unknownFeeds = new Set();
+  for (const page of pages) {
+    if (!page.bodyHtml || !page.bodyHtml.includes('<!--OFD-FEED:')) continue;
+    page.bodyHtml = page.bodyHtml.replace(feedPlaceholderRegex, (_, name) => {
+      const renderer = FEEDS[name];
+      if (!renderer) {
+        unknownFeeds.add(name);
+        return `<!-- unknown feed: ${name} -->`;
+      }
+      return renderer(pages);
+    });
+  }
+  if (unknownFeeds.size > 0) {
+    console.log(`  ⚠ Unknown feed(s) referenced: ${[...unknownFeeds].join(', ')}`);
   }
 
   // Step 5: Load layout

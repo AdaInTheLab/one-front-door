@@ -265,6 +265,73 @@ ${listItems}
   });
 }
 
+// ─── Feed Renderers (inline blocks embedded in pages via ::feed[...]) ──
+
+/**
+ * "Recent from each voice" feed: one most-recent entry per author,
+ * rendered as a card list. Used as an inhabited-feeling block on the
+ * homepage and available to any other page via ::feed[recent-by-voice].
+ *
+ * Voices with no notebook entries are skipped silently (no empty slots).
+ */
+export function renderRecentByVoice(pages) {
+  const entries = pages.filter(p => p.mode === 'notebook');
+  if (entries.length === 0) return '';
+
+  // For each voice slug, pick the single newest entry. An entry authored
+  // jointly by multiple voices still counts for each, which is the right
+  // shape for "recent from each voice" — Ada+Sage co-authorship shows up
+  // on both their lines.
+  const newestPerVoice = new Map();
+  for (const entry of entries) {
+    for (const author of authorsOf(entry)) {
+      const slug = slugify(author);
+      const existing = newestPerVoice.get(slug);
+      if (!existing) {
+        newestPerVoice.set(slug, { name: author, entry });
+        continue;
+      }
+      const ad = toDateString(entry.frontmatter.published_at);
+      const bd = toDateString(existing.entry.frontmatter.published_at);
+      if (ad.localeCompare(bd) > 0) {
+        newestPerVoice.set(slug, { name: author, entry });
+      }
+    }
+  }
+
+  // Sort voices by their newest entry's date, newest first.
+  const ordered = [...newestPerVoice.entries()]
+    .sort((a, b) => {
+      const ad = toDateString(a[1].entry.frontmatter.published_at);
+      const bd = toDateString(b[1].entry.frontmatter.published_at);
+      return bd.localeCompare(ad);
+    });
+
+  if (ordered.length === 0) return '';
+
+  const items = ordered
+    .map(([, { entry }]) =>
+      `  <li>\n    ${renderEntryCard(entry).split('\n').join('\n    ')}\n  </li>`
+    )
+    .join('\n');
+
+  return `<section class="feed feed-recent-by-voice" aria-labelledby="recent-by-voice-heading">
+<h2 id="recent-by-voice-heading">Recent from each voice</h2>
+<p class="lede">One fresh fragment from every voice currently writing in the notebook, newest first. Click any card to read the full entry.</p>
+<ul class="entry-list">
+${items}
+</ul>
+</section>`;
+}
+
+/**
+ * Registry of feed renderers by name. Called from build.js when
+ * substituting <!--OFD-FEED:name--> placeholders in processed pages.
+ */
+export const FEEDS = {
+  'recent-by-voice': renderRecentByVoice,
+};
+
 // ─── Public API ─────────────────────────────────────────────────────────
 
 /**

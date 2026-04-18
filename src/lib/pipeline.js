@@ -205,13 +205,23 @@ export function processPage(filePath, rooms, pagesDir, options = {}) {
     ? processRoomDirectives(content2, rooms)
     : content2;
 
+  // Step 3c: Replace ::feed[name] directives with placeholder HTML comments.
+  // Feeds need the full page list to render, which isn't available yet in
+  // this per-page pipeline. Build.js walks each page after aggregation and
+  // substitutes the placeholders with rendered feed HTML. The comment
+  // survives markdown parsing untouched.
+  const withFeeds = withRooms.replace(
+    /::feed\[([a-zA-Z0-9_-]+)\]/g,
+    (_, name) => `<!--OFD-FEED:${name}-->`
+  );
+
   // Step 4: Parse markdown to HTML
   marked.setOptions({
     renderer: createRenderer(),
     gfm: true,
     breaks: false
   });
-  const rawHtml = marked.parse(withRooms);
+  const rawHtml = marked.parse(withFeeds);
 
   // Step 5: Process heading IDs ({#custom-id} syntax)
   const bodyHtml = processHeadingIds(rawHtml);
