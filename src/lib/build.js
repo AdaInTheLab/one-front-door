@@ -333,6 +333,26 @@ async function build() {
     console.log('  ✓ public/ assets copied');
   }
 
+  // Step 10b: Copy any additional staticPaths declared in config.
+  // Format: [{ from: 'relative-or-absolute path', to: 'dist-subpath' }].
+  // Useful for content-repo assets (images, fonts, etc.) that live
+  // outside the consumer project's own public/ directory.
+  if (Array.isArray(siteConfig.staticPaths)) {
+    for (const sp of siteConfig.staticPaths) {
+      if (!sp || !sp.from) continue;
+      const src = resolve(PROJECT_ROOT, sp.from);
+      const destSub = (sp.to || '').replace(/^\/+|\/+$/g, '');
+      const dest = destSub ? join(DIST, destSub) : DIST;
+      if (!existsSync(src)) {
+        console.log(`  ⚠ staticPath source not found: ${sp.from}`);
+        continue;
+      }
+      mkdirSync(dest, { recursive: true });
+      cpSync(src, dest, { recursive: true });
+      console.log(`  ✓ staticPath copied: ${sp.from} → dist/${destSub || ''}`);
+    }
+  }
+
   // Done. Summary + timing.
   const elapsed = Date.now() - startTime;
   const writtenCount = pages.length - notebookAuditFailures.length;
