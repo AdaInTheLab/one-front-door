@@ -245,6 +245,12 @@ async function build() {
     : defaultFooter;
   layoutHtml = layoutHtml.replace('{footer}', footerHtml);
 
+  // customHead: opt-in raw HTML that consumers (analytics trackers, verification
+  // meta tags, extra font preconnects, etc.) can inject into every page's <head>.
+  // Site-wide, substituted once like {footer}. Empty string when absent.
+  const customHead = typeof siteConfig.customHead === 'string' ? siteConfig.customHead : '';
+  layoutHtml = layoutHtml.replace('{custom-head}', customHead);
+
   // Step 6: Build nav items from site-mode pages only.
   // Notebook entries do not declare nav — their aggregators (voices/burrows/tags)
   // will supply navigation in a later milestone.
